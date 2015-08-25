@@ -49,8 +49,8 @@ SUBDIRS = \
 		tsm_system_time \
 		tsearch2	\
 		unaccent	\
-		vacuumlo	\
-		stormstats
+		vacuumlo	
+	
 
 ifeq ($(with_openssl),yes)
 SUBDIRS += sslinfo

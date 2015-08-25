@@ -2361,7 +2361,7 @@ ProcessUtilitySlow(Node *parsetree,
 				break;
 
 			case T_CreateTrigStmt:
-#ifdef PGXC
+#ifndef PGXC
 				/* Postgres-XC does not support yet triggers */
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -2371,7 +2371,8 @@ ProcessUtilitySlow(Node *parsetree,
 						 errmsg("Postgres-XC does not support TRIGGER yet"),
 #endif
 						 errdetail("The feature is not currently supported")));
-
+#endif
+#ifdef PGXC
 				if (IS_PGXC_LOCAL_COORDINATOR)
 					ExecUtilityStmtOnNodes(queryString, NULL, sentToRemote, false, EXEC_ON_ALL_NODES, false);
 #endif

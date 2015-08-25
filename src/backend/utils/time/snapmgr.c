@@ -651,7 +651,7 @@ UpdateActiveSnapshotCommandId(void)
 	 * next query. This ensures that the effects of previous statements are
 	 * visible to the subsequent statements
 	 */
-	SetSendCommandId(true);
+	SetSendCommandId(false);
 #endif	
 }
 

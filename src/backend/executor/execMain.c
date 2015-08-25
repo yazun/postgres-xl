@@ -1002,7 +1002,13 @@ estate->es_result_remoterel = NULL;
 		 * skipping sending down subplan.
 		 * ExecInitSubPlan takes care about finishing initialization.
 		 */
-		sp_eflags |= EXEC_FLAG_SUBPLAN;
+#ifdef NOT_USED
+               /*
+                * XXX This has caused different bugs, including one for trigger
+                * handling. So short circuiting for now
+                */
+                sp_eflags |= EXEC_FLAG_SUBPLAN;
+#endif
 #endif
 
 		subplanstate = ExecInitNode(subplan, estate, sp_eflags);
