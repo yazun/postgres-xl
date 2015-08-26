@@ -269,14 +269,14 @@ InitMultinodeExecutor(bool is_force)
 char *
 #ifdef XCP
 PGXCNodeConnStr(char *host, int port, char *dbname,
-				char *user, char *remote_type, char *parent_node)
+				char *user, char *pgoptions, char *remote_type, char *parent_node)
 #else
 PGXCNodeConnStr(char *host, int port, char *dbname,
 				char *user, char *pgoptions, char *remote_type)
 #endif
 {
 	char	   *out,
-				connstr[256];
+				connstr[1024];
 	int			num;
 
 	/*
@@ -285,8 +285,9 @@ PGXCNodeConnStr(char *host, int port, char *dbname,
 	 */
 #ifdef XCP
 	num = snprintf(connstr, sizeof(connstr),
-				   "host=%s port=%d dbname=%s user=%s application_name=pgxc sslmode=disable options='-c remotetype=%s -c parentnode=%s'",
-				   host, port, dbname, user, remote_type, parent_node);
+				   "host=%s port=%d dbname=%s user=%s application_name=pgxc sslmode=disable options='-c remotetype=%s -c parentnode=%s %s'",
+				   host, port, dbname, user, remote_type, parent_node,
+				   pgoptions);
 #else
 	num = snprintf(connstr, sizeof(connstr),
 				   "host=%s port=%d dbname=%s user=%s application_name=pgxc options='-c remotetype=%s %s'",
@@ -2722,6 +2723,18 @@ PGXCNodeSetParam(bool local, const char *name, const char *value)
 
 		param_list = lappend(param_list, entry);
 	}
+
+	/*
+	 * Special case for 
+	 * 	RESET SESSION AUTHORIZATION 
+	 * 	SET SESSION AUTHORIZATION TO DEFAULT
+	 *
+	 * We must also forget any SET ROLE commands since RESET SESSION
+	 * AUTHORIZATION also resets current role to session default
+	 */
+	if ((strcmp(name, "session_authorization") == 0) && (value == NULL))
+		param_list = paramlist_delete_param(param_list, "role");
+
 	if (local)
 		local_param_list = param_list;
 	else
