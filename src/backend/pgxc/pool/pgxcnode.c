@@ -22,7 +22,9 @@
  */
 
 #include "postgres.h"
-#include <sys/select.h>
+//#include <sys/select.h>
+#include <poll.h>
+
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
@@ -492,14 +494,23 @@ pgxc_node_receive(const int conn_count,
 #define ERROR_OCCURED		true
 #define NO_ERROR_OCCURED	false
 	int			i,
-				res_select,
-				nfds = 0;
-	fd_set			readfds;
-	bool			is_msg_buffered;
+				sockets_to_poll,
+				poll_val;
+	bool		is_msg_buffered;
+	long timeout_ms;
 
-	FD_ZERO(&readfds);
+	PGXCNodeHandle *conn;
+	struct pollfd *pool_fd;
+
+	pool_fd =  (struct pollfd *) palloc(conn_count * sizeof(struct pollfd));
+
+	/* sockets to be polled index */
+	sockets_to_poll = 0;
+
+	//FD_ZERO(&readfds);
 
 	is_msg_buffered = false;
+
 	for (i = 0; i < conn_count; i++)
 	{
 		/* If connection has a buffered message */
@@ -514,83 +525,120 @@ pgxc_node_receive(const int conn_count,
 	{
 		/* If connection finished sending do not wait input from it */
 		if (connections[i]->state == DN_CONNECTION_STATE_IDLE || HAS_MESSAGE_BUFFERED(connections[i]))
+		{
+			pool_fd[i].fd = -1;
+			pool_fd[i].events = 0;
 			continue;
+		}
 
 		/* prepare select params */
 		if (connections[i]->sock > 0)
 		{
-			FD_SET(connections[i]->sock, &readfds);
-			nfds = connections[i]->sock;
-		}
-		else
-		{
-			/* flag as bad, it will be removed from the list */
-			connections[i]->state = DN_CONNECTION_STATE_ERROR_FATAL;
+			pool_fd[i].fd = connections[i]->sock;
+			pool_fd[i].events = POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND;
+			sockets_to_poll++;
+
+			//FD_SET(connections[i]->sock, &readfds);
+			//nfds = connections[i]->sock;
 		}
 	}
 
 	/*
 	 * Return if we do not have connections to receive input
 	 */
-	if (nfds == 0)
+	if (sockets_to_poll == 0)
 	{
+		pfree(pool_fd);
 		if (is_msg_buffered)
+		{
 			return NO_ERROR_OCCURED;
+		}
 		return ERROR_OCCURED;
 	}
 
+	/* do conversion from the select behaviour */
+	if ( timeout == NULL )
+	{
+		timeout_ms = -1;
+	}
+	else
+	{
+		timeout_ms = (timeout->tv_sec * (uint64_t) 1000) + (timeout->tv_usec / 1000);
+	}
 retry:
 #ifdef XCP
 	CHECK_FOR_INTERRUPTS();
 #endif
-	res_select = select(nfds + 1, &readfds, NULL, NULL, timeout);
-	if (res_select < 0)
+//	poll_val = select(nfds + 1, &readfds, NULL, NULL, timeout);
+	poll_val  = poll(pool_fd, sockets_to_poll, timeout_ms);
+	if (poll_val < 0)
 	{
-		/* error - retry if EINTR or EAGAIN */
-		if (errno == EINTR || errno == EAGAIN)
+		/* error - retry if EINTR */
+		if (errno == EINTR )
+		{   errno = 0;
 			goto retry;
-
-		if (errno == EBADF)
-		{
-			elog(WARNING, "select() bad file descriptor set");
 		}
-		elog(WARNING, "select() error: %d", errno);
+
+		elog(WARNING, "poll() error: %d", errno);
+		pfree(pool_fd);
 		if (errno)
 			return ERROR_OCCURED;
 		return NO_ERROR_OCCURED;
 	}
 
-	if (res_select == 0)
+	if (poll_val == 0)
 	{
 		/* Handle timeout */
-		elog(DEBUG1, "timeout while waiting for response");
+		elog(DEBUG1, "timeout %d while waiting for any response from %d connections", timeout_ms,conn_count);
 #ifdef XCP
 		for (i = 0; i < conn_count; i++)
 			connections[i]->state = DN_CONNECTION_STATE_ERROR_FATAL;
 #endif
+		pfree(pool_fd);
 		return NO_ERROR_OCCURED;
 	}
 
 	/* read data */
 	for (i = 0; i < conn_count; i++)
 	{
-		PGXCNodeHandle *conn = connections[i];
+		if( pool_fd[i].fd == -1 ) continue;
 
-		if (FD_ISSET(conn->sock, &readfds))
+		conn = connections[i];
+
+		if ( pool_fd[i].fd == conn->sock )
 		{
-			int	read_status = pgxc_node_read_data(conn, true);
-
-			if (read_status == EOF || read_status < 0)
+			if( pool_fd[i].revents & POLLIN )
 			{
-				/* Can not read - no more actions, just discard connection */
-				conn->state = DN_CONNECTION_STATE_ERROR_FATAL;
-				add_error_message(conn, "unexpected EOF on datanode connection");
-				elog(WARNING, "unexpected EOF on datanode connection");
-				/* Should we read from the other connections before returning? */
-				return ERROR_OCCURED;
+				int	read_status = pgxc_node_read_data(conn, true);
+				if ( read_status == EOF || read_status < 0 )
+				{
+					/* Can not read - no more actions, just discard connection */
+					conn->state = DN_CONNECTION_STATE_ERROR_FATAL;
+					add_error_message(conn, "unexpected EOF on datanode connection.");
+					elog(WARNING, "unexpected EOF on datanode oid connection: %d", conn->nodeoid);
+					/* Should we read from the other connections before returning? */
+					pfree(pool_fd);
+					return ERROR_OCCURED;
+				}
+
+			}
+			else if (
+					(pool_fd[i].revents & POLLERR) ||
+					(pool_fd[i].revents & POLLHUP) ||
+					(pool_fd[i].revents & POLLNVAL)
+					)
+			{
+				connections[i]->state = DN_CONNECTION_STATE_ERROR_FATAL;
+				add_error_message(conn, "unexpected network error on datanode connection");
+									elog(WARNING, "unexpected EOF on datanode oid connection: %d with event %d", conn->nodeoid,pool_fd[i].revents);
+									/* Should we check/read from the other connections before returning? */
+									pfree(pool_fd);
+									return ERROR_OCCURED;
 			}
 		}
+
 	}
+	pfree(pool_fd);
 	return NO_ERROR_OCCURED;
 }
 
@@ -2725,8 +2773,8 @@ PGXCNodeSetParam(bool local, const char *name, const char *value)
 	}
 
 	/*
-	 * Special case for 
-	 * 	RESET SESSION AUTHORIZATION 
+	 * Special case for
+	 * 	RESET SESSION AUTHORIZATION
 	 * 	SET SESSION AUTHORIZATION TO DEFAULT
 	 *
 	 * We must also forget any SET ROLE commands since RESET SESSION

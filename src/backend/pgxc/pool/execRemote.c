@@ -141,7 +141,7 @@ typedef struct
  * Buffer size does not affect performance significantly, just do not allow
  * connection buffer grows infinitely
  */
-#define COPY_BUFFER_SIZE 8192
+#define COPY_BUFFER_SIZE 8192*8
 #define PRIMARY_NODE_WRITEAHEAD 1024 * 1024
 
 #ifndef XCP
@@ -562,7 +562,7 @@ HandleCommandComplete(RemoteQueryState *combiner, char *msg_body, size_t len, PG
 						/* There is a consistency issue in the database with the replicated table */
 						ereport(ERROR,
 								(errcode(ERRCODE_DATA_CORRUPTED),
-								 errmsg("Write to replicated table returned different results from the Datanodes")));
+								 errmsg("Write to replicated table returned different results from the Datanodes: rowcount %u vs %u",rowcount,estate->es_processed)));
 				}
 				else
 					/* first result */
@@ -7584,7 +7584,7 @@ ExecRemoteQuery(RemoteQueryState *node)
 								step->read_only, PGXC_NODE_DATANODE))
 				ereport(ERROR,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg("Could not begin transaction on data node.")));
+						 errmsg("Could not begin transaction on primary data node.")));
 
 			/* If explicit transaction is needed gxid is already sent */
 			if (!pgxc_start_command_on_connection(primaryconnection, node, snapshot))
@@ -7624,7 +7624,7 @@ ExecRemoteQuery(RemoteQueryState *node)
 								step->read_only, PGXC_NODE_DATANODE))
 				ereport(ERROR,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg("Could not begin transaction on data node.")));
+						 errmsg("Could not begin transaction on data node: %u",connections[i]->nodeoid)));
 
 			/* If explicit transaction is needed gxid is already sent */
 			if (!pgxc_start_command_on_connection(connections[i], node, snapshot))
@@ -7633,7 +7633,7 @@ ExecRemoteQuery(RemoteQueryState *node)
 				pfree_pgxc_all_handles(pgxc_connections);
 				ereport(ERROR,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg("Failed to send command to data nodes")));
+						 errmsg("Failed to send command to data node: %u",connections[i]->nodeoid)));
 			}
 			connections[i]->combiner = combiner;
 		}
@@ -8581,7 +8581,7 @@ ExecFinishInitRemoteSubplan(RemoteSubplanState *node)
 							is_read_only, PGXC_NODE_DATANODE))
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("Could not begin transaction on data node.")));
+					 errmsg("Could not begin transaction on data node: %u",connection->nodeoid)));
 
 		if (pgxc_node_send_timestamp(connection, timestamp))
 		{
@@ -8589,7 +8589,7 @@ ExecFinishInitRemoteSubplan(RemoteSubplanState *node)
 			pfree(combiner->connections);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("Failed to send command to data nodes")));
+					 errmsg("Failed to send command to data nodes: %u",connection->nodeoid)));
 		}
 		if (snapshot && pgxc_node_send_snapshot(connection, snapshot))
 		{
@@ -8597,7 +8597,7 @@ ExecFinishInitRemoteSubplan(RemoteSubplanState *node)
 			pfree(combiner->connections);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("Failed to send snapshot to data nodes")));
+					 errmsg("Failed to send snapshot to data nodes: %u",connection->nodeoid)));
 		}
 		if (pgxc_node_send_cmd_id(connection, estate->es_snapshot->curcid) < 0 )
 		{
@@ -8605,7 +8605,7 @@ ExecFinishInitRemoteSubplan(RemoteSubplanState *node)
 			pfree(combiner->connections);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("Failed to send command ID to data nodes")));
+					 errmsg("Failed to send command ID to data nodes: %u",connection->nodeoid)));
 		}
 		pgxc_node_send_plan(connection, cursor, "Remote Subplan",
 							node->subplanstr, node->nParamRemote, paramtypes);
@@ -8615,7 +8615,7 @@ ExecFinishInitRemoteSubplan(RemoteSubplanState *node)
 			pfree(combiner->connections);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("Failed to send subplan to data nodes")));
+					 errmsg("Failed to send subplan to data node: %u",connection->nodeoid)));
 		}
 	}
 }

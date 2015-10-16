@@ -127,6 +127,10 @@ typedef struct
 	bool			is_temp; /* Temporary objects used for this pool session? */
 #endif
 } PoolAgent;
+/*
+ * Helper to poll for all pooler sockets
+ */
+typedef struct pollfd Pollfd;
 
 #ifndef XCP
 /* Handle to the pool manager (Session's side) */
