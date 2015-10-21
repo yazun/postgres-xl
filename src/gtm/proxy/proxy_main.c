@@ -139,7 +139,9 @@ extern void InitializeGTMOptions(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *conn);
 static int ServerLoop(void);
-static int initMasks(fd_set *rmask);
+
+static struct pollfd* initPoll();
+
 void *GTMProxy_ThreadMain(void *argp);
 static int GTMProxyAddConnection(Port *port);
 static int ReadCommand(GTMProxy_ConnectionInfo *conninfo, StringInfo inBuf);
@@ -946,14 +948,12 @@ ConnFree(Port *conn)
 static int
 ServerLoop(void)
 {
-	fd_set		readmask;
-	int			nSockets;
+	struct pollfd *poll_fd;
 
-	nSockets = initMasks(&readmask);
+	poll_fd = initPoll();
 
 	for (;;)
 	{
-		fd_set		rmask;
 		int			selres;
 
 		if (sigsetjmp(mainThreadSIGUSR1_buf, 1) != 0)
@@ -989,7 +989,6 @@ ServerLoop(void)
 		 * Wait at most one minute, to ensure that the other background
 		 * tasks handled below get done even when no requests are arriving.
 		 */
-		memcpy((char *) &rmask, (char *) &readmask, sizeof(fd_set));
 
 		PG_SETMASK(&UnBlockSig);
 
@@ -1004,13 +1003,7 @@ ServerLoop(void)
 		}
 
 		{
-			/* must set timeout each time; some OSes change it! */
-			struct timeval timeout;
-
-			timeout.tv_sec = 60;
-			timeout.tv_usec = 0;
-
-			selres = select(nSockets, &rmask, NULL, NULL, &timeout);
+			selres = poll(poll_fd, MAXLISTEN, 60 * 1000);
 		}
 
 		/*
@@ -1019,14 +1012,15 @@ ServerLoop(void)
 		 */
 		PG_SETMASK(&BlockSig);
 
-		/* Now check the select() result */
+		/* Now check the poll() result */
 		if (selres < 0)
 		{
 			if (errno != EINTR && errno != EWOULDBLOCK)
 			{
-				ereport(DEBUG1,
+				ereport(FATAL,
 						(EACCES,
-						 errmsg("select() failed in main thread: %m")));
+						 errmsg("poll() failed in main thread: %m")));
+				pfree(poll_fd);
 				return STATUS_ERROR;
 			}
 		}
@@ -1037,15 +1031,16 @@ ServerLoop(void)
 		 */
 		if (selres > 0)
 		{
-			int			i;
+			int	i;
 
 			for (i = 0; i < MAXLISTEN; i++)
 			{
 				if (ListenSocket[i] == -1)
 					break;
-				if (FD_ISSET(ListenSocket[i], &rmask))
+
+				if (poll_fd[i].revents & POLLIN)
 				{
-					Port	   *port;
+					Port *port;
 
 					port = ConnCreate(ListenSocket[i]);
 					if (port)
@@ -1056,36 +1051,34 @@ ServerLoop(void)
 							ConnFree(port);
 						}
 					}
+
 				}
 			}
 		}
 	}
+
+	pfree(poll_fd);
 }
 
+
 /*
- * Initialise the masks for select() for the ports we are listening on.
- * Return the number of sockets to listen on.
+ * Initialise array for poll handles
  */
-static int
-initMasks(fd_set *rmask)
+
+static struct pollfd* initPoll()
 {
-	int			maxsock = -1;
-	int			i;
+	struct pollfd *pool_fd;
+	int i;
 
-	FD_ZERO(rmask);
-
-	for (i = 0; i < MAXLISTEN; i++)
+	pool_fd = (struct pollfd *) palloc( MAXLISTEN * sizeof(struct pollfd) );
+	for ( i = 0; i < MAXLISTEN; i++ )
 	{
-		int			fd = ListenSocket[i];
+		if(ListenSocket[i] == -1) break;
+		pool_fd[i].fd = ListenSocket[i];
+		pool_fd[i].events = POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND;
 
-		if (fd == -1)
-			break;
-		FD_SET(fd, rmask);
-		if (fd > maxsock)
-			maxsock = fd;
 	}
-
-	return maxsock + 1;
+	return pool_fd;
 }
 
 /*
