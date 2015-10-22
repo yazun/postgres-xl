@@ -141,7 +141,7 @@ typedef struct
  * Buffer size does not affect performance significantly, just do not allow
  * connection buffer grows infinitely
  */
-#define COPY_BUFFER_SIZE 8192*8
+#define COPY_BUFFER_SIZE 8192 * 8
 #define PRIMARY_NODE_WRITEAHEAD 1024 * 1024
 
 #ifndef XCP
@@ -1926,7 +1926,7 @@ FetchTuple(ResponseCombiner *combiner)
 			}
 
 			/*
-			 * Tell the node to fetch data in background, next loop when we 
+			 * Tell the node to fetch data in background, next loop when we
 			 * pgxc_node_receive, data is already there, so we can run faster
 			 * */
 			if (pgxc_node_send_execute(conn, combiner->cursor, 1000) != 0)
@@ -2404,7 +2404,7 @@ handle_response(PGXCNodeHandle *conn, ResponseCombiner *combiner)
 				return RESPONSE_COMPLETE;
 #ifdef XCP
 			case 'W':
-				HandleWaitXids(msg, msg_len);	
+				HandleWaitXids(msg, msg_len);
 				return RESPONSE_WAITXIDS;
 #endif
 			default:
@@ -5907,8 +5907,8 @@ ExecRemoteUtility(RemoteQuery *node)
 	ExecDirectType		exec_direct_type = node->exec_direct_type;
 	int			i;
 #ifdef XCP
-	CommandId	cid = GetCurrentCommandId(true);	
-#endif	
+	CommandId	cid = GetCurrentCommandId(true);
+#endif
 
 	if (!force_autocommit)
 		RegisterTransactionLocalNode(true);
@@ -5919,10 +5919,10 @@ ExecRemoteUtility(RemoteQuery *node)
 	InitResponseCombiner(combiner, 0, node->combine_type);
 
 	/*
-	 * Do not set global_session if it is a utility statement. 
+	 * Do not set global_session if it is a utility statement.
  	 * Avoids CREATE NODE error on cluster configuration.
  	 */
-	pgxc_connections = get_exec_connections(NULL, node->exec_nodes, exec_type, 
+	pgxc_connections = get_exec_connections(NULL, node->exec_nodes, exec_type,
 											exec_direct_type != EXEC_DIRECT_UTILITY);
 #else
 	/*
@@ -8509,11 +8509,11 @@ ExecFinishInitRemoteSubplan(RemoteSubplanState *node)
 	if (node->subplanstr == NULL)
 		return;
 
-	/* 
+	/*
 	 * Check if any results are planned to be received here.
 	 * Otherwise it does not make sense to send out the subplan.
 	 */
-	if (IS_PGXC_DATANODE && plan->distributionRestrict && 
+	if (IS_PGXC_DATANODE && plan->distributionRestrict &&
 			!list_member_int(plan->distributionRestrict, PGXCNodeId - 1))
 		return;
 
@@ -8729,17 +8729,17 @@ ExecRemoteSubplan(RemoteSubplanState *node)
 	EState		   *estate = combiner->ss.ps.state;
 	TupleTableSlot *resultslot = combiner->ss.ps.ps_ResultTupleSlot;
 
-	/* 
+	/*
 	 * We allow combiner->conn_count == 0 after node initialization
 	 * if we figured out that current node won't receive any result
 	 * because of distributionRestrict is set by planner.
 	 * But we should distinguish this case from others, when conn_count is 0.
-	 * That is possible if local execution is chosen or data are buffered 
+	 * That is possible if local execution is chosen or data are buffered
 	 * at the coordinator or data are exhausted and node was reset.
 	 * in last two cases connections are saved to cursor_connections and we
-	 * can check their presence.  
+	 * can check their presence.
 	 */
-	if (!node->local_exec && combiner->conn_count == 0 && 
+	if (!node->local_exec && combiner->conn_count == 0 &&
 			combiner->cursor_count == 0)
 		return NULL;
 
