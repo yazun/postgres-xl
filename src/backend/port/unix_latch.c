@@ -308,7 +308,7 @@ WaitLatchOrSocket(volatile Latch *latch, int wakeEvents, pgsocket sock,
 			pfds[0].fd = sock;
 			pfds[0].events = 0;
 			if (wakeEvents & WL_SOCKET_READABLE)
-				pfds[0].events |= POLLIN;
+				pfds[0].events |= POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND;
 			if (wakeEvents & WL_SOCKET_WRITEABLE)
 				pfds[0].events |= POLLOUT;
 			pfds[0].revents = 0;
