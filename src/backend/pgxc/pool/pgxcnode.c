@@ -65,6 +65,7 @@
 #endif
 
 #define CMD_ID_MSG_LEN 8
+#define NETWORK_BUFFER_SIZE	8192 * 8
 
 /* Number of connections held */
 static int	datanode_count = 0;
@@ -137,9 +138,9 @@ init_pgxc_handle(PGXCNodeHandle *pgxc_handle)
 
 	/* Initialise buffers */
 	pgxc_handle->error = NULL;
-	pgxc_handle->outSize = 16 * 1024;
+	pgxc_handle->outSize = NETWORK_BUFFER_SIZE * 4;
 	pgxc_handle->outBuffer = (char *) palloc(pgxc_handle->outSize);
-	pgxc_handle->inSize = 16 * 1024;
+	pgxc_handle->inSize = NETWORK_BUFFER_SIZE * 4;
 
 	pgxc_handle->inBuffer = (char *) palloc(pgxc_handle->inSize);
 	pgxc_handle->combiner = NULL;
@@ -493,21 +494,19 @@ pgxc_node_receive(const int conn_count,
 {
 #define ERROR_OCCURED		true
 #define NO_ERROR_OCCURED	false
-	int			i,
-				sockets_to_poll,
-				poll_val;
-	bool		is_msg_buffered;
+	int	i,
+		sockets_to_poll,
+		poll_val;
+
+	bool is_msg_buffered;
 	long timeout_ms;
 
 	PGXCNodeHandle *conn;
 	struct pollfd *pool_fd;
 
 	pool_fd =  (struct pollfd *) palloc(conn_count * sizeof(struct pollfd));
-
 	/* sockets to be polled index */
 	sockets_to_poll = 0;
-
-	//FD_ZERO(&readfds);
 
 	is_msg_buffered = false;
 
@@ -523,7 +522,7 @@ pgxc_node_receive(const int conn_count,
 
 	for (i = 0; i < conn_count; i++)
 	{
-		/* If connection finished sending do not wait input from it */
+		/* If connection finished sending do not wait for input from it */
 		if (connections[i]->state == DN_CONNECTION_STATE_IDLE || HAS_MESSAGE_BUFFERED(connections[i]))
 		{
 			pool_fd[i].fd = -1;
@@ -538,8 +537,6 @@ pgxc_node_receive(const int conn_count,
 			pool_fd[i].events = POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND;
 			sockets_to_poll++;
 
-			//FD_SET(connections[i]->sock, &readfds);
-			//nfds = connections[i]->sock;
 		}
 	}
 
@@ -569,7 +566,6 @@ retry:
 #ifdef XCP
 	CHECK_FOR_INTERRUPTS();
 #endif
-//	poll_val = select(nfds + 1, &readfds, NULL, NULL, timeout);
 	poll_val  = poll(pool_fd, sockets_to_poll, timeout_ms);
 	if (poll_val < 0)
 	{
@@ -610,7 +606,7 @@ retry:
 			if( pool_fd[i].revents & POLLIN )
 			{
 				int	read_status = pgxc_node_read_data(conn, true);
-				if ( read_status == EOF || read_status < 0 )
+				if (read_status == EOF || read_status < 0)
 				{
 					/* Can not read - no more actions, just discard connection */
 					conn->state = DN_CONNECTION_STATE_ERROR_FATAL;
@@ -625,13 +621,12 @@ retry:
 			else if (
 					(pool_fd[i].revents & POLLERR) ||
 					(pool_fd[i].revents & POLLHUP) ||
-					(pool_fd[i].revents & POLLNVAL)
-					)
+					(pool_fd[i].revents & POLLNVAL))
 			{
 				connections[i]->state = DN_CONNECTION_STATE_ERROR_FATAL;
 				add_error_message(conn, "unexpected network error on datanode connection");
-									elog(WARNING, "unexpected EOF on datanode oid connection: %d with event %d", conn->nodeoid,pool_fd[i].revents);
-									/* Should we check/read from the other connections before returning? */
+									elog(WARNING, "unexpected EOF on datanode oid connection: %d", conn->nodeoid);
+									/* Should we read from the other connections before returning? */
 									pfree(pool_fd);
 									return ERROR_OCCURED;
 			}
@@ -704,9 +699,9 @@ pgxc_node_read_data(PGXCNodeHandle *conn, bool close_if_error)
 	 * enough for a TCP packet or Unix pipe bufferload.  8K is the usual pipe
 	 * buffer size, so...
 	 */
-	if (conn->inSize - conn->inEnd < 8192)
+	if (conn->inSize - conn->inEnd < NETWORK_BUFFER_SIZE)
 	{
-		if (ensure_in_buffer_capacity(conn->inEnd + (size_t) 8192, conn) != 0)
+		if (ensure_in_buffer_capacity(conn->inEnd + (size_t) NETWORK_BUFFER_SIZE, conn) != 0)
 		{
 			/*
 			 * We don't insist that the enlarge worked, but we need some room
@@ -786,8 +781,8 @@ retry:
 		 * amount of data already read in the current message.	We consider
 		 * the message "long" once we have acquired 32k ...
 		 */
-		if (conn->inEnd > 32768 &&
-			(conn->inSize - conn->inEnd) >= 8192)
+		if (conn->inEnd > NETWORK_BUFFER_SIZE * 4 &&
+			(conn->inSize - conn->inEnd) >= NETWORK_BUFFER_SIZE)
 		{
 			someread = 1;
 			goto retry;
@@ -1182,7 +1177,7 @@ ensure_in_buffer_capacity(size_t bytes_needed, PGXCNodeHandle *handle)
 	newsize = handle->inSize;
 	do
 	{
-		newsize += 8192;
+		newsize += NETWORK_BUFFER_SIZE;
 	} while (newsize > 0 && bytes_needed > (size_t) newsize);
 
 	if (newsize > 0 && bytes_needed <= (size_t) newsize)
@@ -1234,7 +1229,7 @@ ensure_out_buffer_capacity(size_t bytes_needed, PGXCNodeHandle *handle)
 	newsize = handle->outSize;
 	do
 	{
-		newsize += 8192;
+		newsize += NETWORK_BUFFER_SIZE;
 	} while (newsize > 0 && bytes_needed > (size_t) newsize);
 
 	if (newsize > 0 && bytes_needed <= (size_t) newsize)
