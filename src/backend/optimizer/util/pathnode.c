@@ -2833,19 +2833,39 @@ create_nestloop_path(PlannerInfo *root,
 	pathnode->movedrestrictinfo = mclauses;
 
 	alternate = set_joinpath_distribution(root, pathnode);
+	 /* Kludge. Costs should be recalculated if above function altered any
+	  * the subpathes.
+	  */
+	 if (pathnode->outerjoinpath != outer_path ||
+					 pathnode->innerjoinpath != inner_path)
+	 {
+			 initial_cost_nestloop(root, workspace, jointype,
+													   pathnode->outerjoinpath, pathnode->innerjoinpath,
+													   sjinfo, semifactors);
+	 }
 #endif
 	final_cost_nestloop(root, pathnode, workspace, sjinfo, semifactors);
 
 #ifdef XCP
 	/*
-	 * Also calculate costs of all alternates and return cheapest path
-	 */
+	 * Recalculate costs of all alternates and add pathes to the relation, if
+    * it worth
+     */
 	foreach(lc, alternate)
 	{
 		NestPath *altpath = (NestPath *) lfirst(lc);
-		final_cost_nestloop(root, altpath, workspace, sjinfo, semifactors);
-		if (altpath->path.total_cost < pathnode->path.total_cost)
-			pathnode = altpath;
+//		final_cost_nestloop(root, altpath, workspace, sjinfo, semifactors);
+//		if (altpath->path.total_cost < pathnode->path.total_cost)
+//			pathnode = altpath;
+		  initial_cost_nestloop(root, workspace, jointype,
+		                                            altpath->outerjoinpath,
+													altpath->innerjoinpath, sjinfo, semifactors);
+
+		if (add_path_precheck(joinrel, workspace->startup_cost,
+				workspace->total_cost, pathkeys, required_outer)) {
+			final_cost_nestloop(root, altpath, workspace, sjinfo, semifactors);
+			add_path(joinrel, (Path *) altpath);
+		  }
 	}
 #endif
 
@@ -2912,20 +2932,43 @@ create_mergejoin_path(PlannerInfo *root,
 	pathnode->innersortkeys = innersortkeys;
 #ifdef XCP
 	alternate = set_joinpath_distribution(root, (JoinPath *) pathnode);
+	  /* Kludge. Costs should be recalculated if above function altered any
+	  * the subpathes.
+	  */
+	 if (pathnode->jpath.outerjoinpath != outer_path ||
+	                 pathnode->jpath.innerjoinpath != inner_path)
+	 {
+	         initial_cost_mergejoin(root, workspace, jointype, mergeclauses,
+	                                                    pathnode->jpath.outerjoinpath,
+	                                                    pathnode->jpath.innerjoinpath,
+	                                                    outersortkeys, innersortkeys,
+	                                                    sjinfo);
+	 }
 #endif
 	/* pathnode->materialize_inner will be set by final_cost_mergejoin */
 	final_cost_mergejoin(root, pathnode, workspace, sjinfo);
 
 #ifdef XCP
 	/*
-	 * Also calculate costs of all alternates and return cheapest path
-	 */
+	 * Recalculate costs of all alternates and add pathes to the relation, if
+     * it worth
+     */
 	foreach(lc, alternate)
 	{
 		MergePath *altpath = (MergePath *) lfirst(lc);
-		final_cost_mergejoin(root, altpath, workspace, sjinfo);
-		if (altpath->jpath.path.total_cost < pathnode->jpath.path.total_cost)
-			pathnode = altpath;
+        initial_cost_mergejoin(root, workspace, jointype, mergeclauses,
+                                               altpath->jpath.outerjoinpath,
+                                               altpath->jpath.innerjoinpath,
+                                               outersortkeys, innersortkeys,
+                                               sjinfo);
+
+     if (add_path_precheck(joinrel,
+                                               workspace->startup_cost, workspace->total_cost,
+                                               pathkeys, required_outer))
+     {
+             final_cost_mergejoin(root, altpath, workspace, sjinfo);
+             add_path(joinrel, (Path *) altpath);
+     }
 	}
 #endif
 
@@ -2997,20 +3040,41 @@ create_hashjoin_path(PlannerInfo *root,
 	pathnode->path_hashclauses = hashclauses;
 #ifdef XCP
 	alternate = set_joinpath_distribution(root, (JoinPath *) pathnode);
+    /* Kludge. Costs should be recalculated if above function altered any
+     * the subpathes.
+	 */
+	  if (pathnode->jpath.outerjoinpath != outer_path ||
+					  pathnode->jpath.innerjoinpath != inner_path)
+	  {
+			  initial_cost_hashjoin(root, workspace, jointype, hashclauses,
+														pathnode->jpath.outerjoinpath,
+														pathnode->jpath.innerjoinpath,
+														sjinfo, semifactors);
+       }
 #endif
 	/* final_cost_hashjoin will fill in pathnode->num_batches */
 	final_cost_hashjoin(root, pathnode, workspace, sjinfo, semifactors);
 
 #ifdef XCP
 	/*
-	 * Calculate costs of all alternates and return cheapest path
+	 * Recalculate costs of all alternates and add pathes to the relation, if
+     * it worth
 	 */
 	foreach(lc, alternate)
 	{
 		HashPath *altpath = (HashPath *) lfirst(lc);
-		final_cost_hashjoin(root, altpath, workspace, sjinfo, semifactors);
-		if (altpath->jpath.path.total_cost < pathnode->jpath.path.total_cost)
-			pathnode = altpath;
+		initial_cost_hashjoin(root, workspace, jointype, hashclauses,
+		                                          altpath->jpath.outerjoinpath,
+		                                          altpath->jpath.innerjoinpath,
+		                                          sjinfo, semifactors);
+
+		if (add_path_precheck(joinrel,
+		                                          workspace->startup_cost, workspace->total_cost,
+		                                          NIL, required_outer))
+		{
+		        final_cost_hashjoin(root, altpath, workspace, sjinfo, semifactors);
+		        add_path(joinrel, (Path *) altpath);
+		}
 	}
 #endif
 
